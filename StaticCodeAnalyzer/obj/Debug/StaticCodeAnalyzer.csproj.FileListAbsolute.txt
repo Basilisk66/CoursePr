@@ -1,0 +1,15 @@
+D:\LanguageProgramming\C++\OOP\CourseWork\StaticCodeAnalyzer\StaticCodeAnalyzer\bin\Debug\StaticCodeAnalyzer.exe.config
+D:\LanguageProgramming\C++\OOP\CourseWork\StaticCodeAnalyzer\StaticCodeAnalyzer\bin\Debug\StaticCodeAnalyzer.exe
+D:\LanguageProgramming\C++\OOP\CourseWork\StaticCodeAnalyzer\StaticCodeAnalyzer\bin\Debug\StaticCodeAnalyzer.pdb
+D:\LanguageProgramming\C++\OOP\CourseWork\StaticCodeAnalyzer\StaticCodeAnalyzer\obj\Debug\StaticCodeAnalyzer.csproj.AssemblyReference.cache
+D:\LanguageProgramming\C++\OOP\CourseWork\StaticCodeAnalyzer\StaticCodeAnalyzer\obj\Debug\MainWindow.baml
+D:\LanguageProgramming\C++\OOP\CourseWork\StaticCodeAnalyzer\StaticCodeAnalyzer\obj\Debug\MainWindow.g.cs
+D:\LanguageProgramming\C++\OOP\CourseWork\StaticCodeAnalyzer\StaticCodeAnalyzer\obj\Debug\App.g.cs
+D:\LanguageProgramming\C++\OOP\CourseWork\StaticCodeAnalyzer\StaticCodeAnalyzer\obj\Debug\StaticCodeAnalyzer_MarkupCompile.cache
+D:\LanguageProgramming\C++\OOP\CourseWork\StaticCodeAnalyzer\StaticCodeAnalyzer\obj\Debug\StaticCodeAnalyzer.g.resources
+D:\LanguageProgramming\C++\OOP\CourseWork\StaticCodeAnalyzer\StaticCodeAnalyzer\obj\Debug\StaticCodeAnalyzer.Properties.Resources.resources
+D:\LanguageProgramming\C++\OOP\CourseWork\StaticCodeAnalyzer\StaticCodeAnalyzer\obj\Debug\StaticCodeAnalyzer.csproj.GenerateResource.cache
+D:\LanguageProgramming\C++\OOP\CourseWork\StaticCodeAnalyzer\StaticCodeAnalyzer\obj\Debug\StaticCodeAnalyzer.csproj.CoreCompileInputs.cache
+D:\LanguageProgramming\C++\OOP\CourseWork\StaticCodeAnalyzer\StaticCodeAnalyzer\obj\Debug\StaticCodeAnalyzer.exe
+D:\LanguageProgramming\C++\OOP\CourseWork\StaticCodeAnalyzer\StaticCodeAnalyzer\obj\Debug\StaticCodeAnalyzer.pdb
+D:\LanguageProgramming\C++\OOP\CourseWork\StaticCodeAnalyzer\StaticCodeAnalyzer\obj\Debug\StaticCodeAnalyzer.exe.config
