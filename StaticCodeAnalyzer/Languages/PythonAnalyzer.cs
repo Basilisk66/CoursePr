@@ -32,15 +32,130 @@ namespace StaticCodeAnalyzer.Models
 
             // Применяем правила
             results.AddRange(CheckOperatorSpacing(lines));
+            results.AddRange(CheckCommaSpacing(lines)); // Улучшенная проверка
+            results.AddRange(CheckNoneComparisons(lines));
             results.AddRange(CheckIndentation(lines, 4));
             results.AddRange(CheckEmptyLines(lines));
             results.AddRange(CheckKeywordsAsNames(lines));
             results.AddRange(CheckControlStructures(lines));
-            results.AddRange(CheckCodeDuplication(lines)); // Измененный метод
+            results.AddRange(CheckCodeDuplication(lines));
             results.AddRange(CheckEmptyIfStatements(lines));
-            results.AddRange(CheckImports(lines)); // Новый метод
-            results.AddRange(CheckNamingConvention(lines)); // Новый метод
+            results.AddRange(CheckImports(lines));
+            results.AddRange(CheckNamingConvention(lines));
 
+            return results;
+        }
+
+        protected new List<AnalysisResult> CheckKeywordsAsNames(string[] lines)
+        {
+            var results = new List<AnalysisResult>();
+            if (!_keywords.Any()) return results;
+
+            for (int i = 0; i < lines.Length; i++)
+            {
+                string line = lines[i];
+                string trimmedLine = line.Trim();
+                string indent = new string(' ', line.Length - line.TrimStart().Length);
+
+                if (string.IsNullOrWhiteSpace(trimmedLine) || trimmedLine.StartsWith("#"))
+                    continue;
+
+                // Проверка имен классов
+                var classMatch = Regex.Match(trimmedLine, @"^class\s+(\w+)\s*(?:\(|:)");
+                if (classMatch.Success)
+                {
+                    string className = classMatch.Groups[1].Value;
+                    if (_keywords.Contains(className.ToLower()))
+                    {
+                        string fixedName = className + "_";
+                        string fixedLine = trimmedLine.Replace(className, fixedName);
+                        results.Add(new AnalysisResult(
+                            i + 1,
+                            "Naming",
+                            $"Class name '{className}' conflicts with Python keyword",
+                            "Rename class by appending '_' suffix",
+                            trimmedLine,
+                            fixedLine
+                        ));
+                    }
+                }
+
+                // Проверка имен функций
+                var funcMatch = Regex.Match(trimmedLine, @"^def\s+(\w+)\s*\(");
+                if (funcMatch.Success)
+                {
+                    string funcName = funcMatch.Groups[1].Value;
+                    if (_keywords.Contains(funcName.ToLower()))
+                    {
+                        string fixedName = funcName + "_";
+                        string fixedLine = trimmedLine.Replace(funcName, fixedName);
+                        results.Add(new AnalysisResult(
+                            i + 1,
+                            "Naming",
+                            $"Function name '{funcName}' conflicts with Python keyword",
+                            "Rename function by appending '_' suffix",
+                            trimmedLine,
+                            fixedLine
+                        ));
+                    }
+                }
+
+                // Проверка имен переменных (простое присваивание)
+                var varMatch = Regex.Match(trimmedLine, @"^\s*(\w+)\s*=");
+                if (varMatch.Success)
+                {
+                    string varName = varMatch.Groups[1].Value;
+                    // Пропускаем, если это константа (UPPER_SNAKE_CASE) или специальная переменная
+                    if (_keywords.Contains(varName.ToLower()) && !IsUpperSnakeCase(varName) && !IsSpecialVariable(varName))
+                    {
+                        string fixedName = varName + "_";
+                        string fixedLine = line.Replace(varName, fixedName);
+                        results.Add(new AnalysisResult(
+                            i + 1,
+                            "Naming",
+                            $"Variable name '{varName}' conflicts with Python keyword",
+                            "Rename variable by appending '_' suffix",
+                            line.Trim(),
+                            fixedLine.Trim()
+                        ));
+                    }
+                }
+
+                // Проверка параметров функций (в определении функции)
+                if (trimmedLine.StartsWith("def "))
+                {
+                    var paramMatch = Regex.Match(trimmedLine, @"def\s+\w+\s*\((.*?)\)");
+                    if (paramMatch.Success && !string.IsNullOrWhiteSpace(paramMatch.Groups[1].Value))
+                    {
+                        string paramsStr = paramMatch.Groups[1].Value;
+                        // Разбираем параметры (могут быть с типами аннотациями и значениями по умолчанию)
+                        // Ищем имена параметров - они идут перед : (type hint) или = (default value) или , (next param)
+                        var paramNameMatches = Regex.Matches(paramsStr, @"\b(\w+)(?=\s*(?:[,:=\*]|$))");
+                        foreach (Match paramMatchInner in paramNameMatches)
+                        {
+                            string paramName = paramMatchInner.Groups[1].Value;
+                            // Пропускаем специальные параметры (*args, **kwargs)
+                            if (paramName == "self" || paramName == "cls" || paramName.StartsWith("*"))
+                                continue;
+
+                            if (_keywords.Contains(paramName.ToLower()))
+                            {
+                                string fixedName = paramName + "_";
+                                // Более точная замена - используем границы слов
+                                string fixedLine = Regex.Replace(line, $@"\b{Regex.Escape(paramName)}\b", fixedName);
+                                results.Add(new AnalysisResult(
+                                    i + 1,
+                                    "Naming",
+                                    $"Parameter name '{paramName}' conflicts with Python keyword",
+                                    "Rename parameter by appending '_' suffix",
+                                    line.Trim(),
+                                    fixedLine.Trim()
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
             return results;
         }
 
@@ -55,35 +170,30 @@ namespace StaticCodeAnalyzer.Models
                 if (string.IsNullOrWhiteSpace(trimmed) || trimmed.StartsWith("#"))
                     continue;
 
-                // Проверяем операторы без пробелов (PEP 8)
-                var operators = new[] { "=", "==", "!=", "<", ">", "<=", ">=", "+", "-", "*", "/", "%", "and", "or", "is", "in" };
+                // Пропускаем import и from statements - они обрабатываются отдельно
+                if (trimmed.StartsWith("import ") || trimmed.StartsWith("from "))
+                    continue;
 
-                foreach (var op in operators)
+                // Многосимвольные операторы - проверяем только что они имеют пробелы вокруг, но не разбиваем сами операторы
+                var multiCharOperators = new[] { "==", "!=", "<=", ">=", "+=", "-=", "*=", "/=", "%=", "**", "//", "->", "++", "--" };
+
+                foreach (var op in multiCharOperators)
                 {
-                    if (op.Length > 1)
+                    var escapedOp = Regex.Escape(op);
+                    // Паттерн: оператор слит с символом слева или справа (но не внутри строки)
+                    var pattern = $@"([^\s])({escapedOp})([^\s])";
+                    var matches = Regex.Matches(trimmed, pattern);
+                    foreach (Match match in matches)
                     {
-                        // Для словесных операторов
-                        var pattern = $@"(\w)({op})(\w)";
-                        if (Regex.IsMatch(trimmed, pattern))
+                        if (!IsInsideString(trimmed, match.Index))
                         {
-                            string fixedLine = Regex.Replace(trimmed, pattern, "$1 $2 $3");
-                            results.Add(new AnalysisResult(
-                                i + 1,
-                                "Formatting",
-                                $"Missing spaces around operator '{op}'",
-                                "Add spaces around operator",
-                                trimmed,
-                                fixedLine
-                            ));
-                        }
-                    }
-                    else
-                    {
-                        // Для символьных операторов
-                        var pattern = $@"(\S)({Regex.Escape(op)})(\S)";
-                        if (Regex.IsMatch(trimmed, pattern) && !IsException(trimmed, op))
-                        {
-                            string fixedLine = Regex.Replace(trimmed, pattern, "$1 $2 $3");
+                            // Исключаем инкремент/декремент - они должны быть без пробелов
+                            if (op == "++" || op == "--")
+                                continue;
+
+                            string fixedLine = trimmed.Substring(0, match.Index) +
+                                match.Groups[1].Value + " " + match.Groups[2].Value + " " + match.Groups[3].Value +
+                                trimmed.Substring(match.Index + match.Length);
                             results.Add(new AnalysisResult(
                                 i + 1,
                                 "Formatting",
@@ -95,8 +205,379 @@ namespace StaticCodeAnalyzer.Models
                         }
                     }
                 }
+
+                // Собираем позиции, которые уже являются частью многосимвольных операторов
+                HashSet<int> multiCharOpPositions = new HashSet<int>();
+                foreach (var op in multiCharOperators)
+                {
+                    int index = 0;
+                    while ((index = trimmed.IndexOf(op, index)) != -1)
+                    {
+                        if (!IsInsideString(trimmed, index))
+                        {
+                            for (int j = 0; j < op.Length; j++)
+                            {
+                                multiCharOpPositions.Add(index + j);
+                            }
+                        }
+                        index += op.Length;
+                    }
+                }
+
+                // Одиночные символьные операторы (но не те, что входят в многосимвольные)
+                var singleCharOps = new[] { "=", "<", ">", "+", "-", "*", "/", "%" };
+                foreach (var op in singleCharOps)
+                {
+                    var escapedOp = Regex.Escape(op);
+                    var pattern = $@"(\S)({escapedOp})(\S)";
+                    var matches = Regex.Matches(trimmed, pattern);
+                    foreach (Match match in matches)
+                    {
+                        int opIndex = match.Index + match.Groups[2].Index - match.Index;
+
+                        // Пропускаем, если этот оператор уже является частью многосимвольного оператора
+                        if (multiCharOpPositions.Contains(opIndex))
+                            continue;
+
+                        // Дополнительная проверка: проверяем контекст вокруг оператора
+                        char charBefore = opIndex > 0 ? trimmed[opIndex - 1] : ' ';
+                        char charAfter = opIndex + 1 < trimmed.Length ? trimmed[opIndex + 1] : ' ';
+
+                        // Пропускаем если это часть многосимвольного оператора
+                        bool isPartOfMultiChar = false;
+                        if (op == "=")
+                        {
+                            if (charAfter == '=' || charBefore == '=' || charBefore == '!' || charBefore == '<' ||
+                                charBefore == '>' || charBefore == '+' || charBefore == '-' || charBefore == '*' ||
+                                charBefore == '/' || charBefore == '%')
+                                isPartOfMultiChar = true;
+                        }
+                        else if (op == "<" && charAfter == '=')
+                            isPartOfMultiChar = true;
+                        else if (op == ">" && charAfter == '=')
+                            isPartOfMultiChar = true;
+                        else if (op == "+" && (charAfter == '+' || charAfter == '='))
+                            isPartOfMultiChar = true;
+                        else if (op == "-" && (charAfter == '-' || charAfter == '=' || charAfter == '>'))
+                            isPartOfMultiChar = true;
+                        else if (op == "*" && (charAfter == '*' || charAfter == '='))
+                            isPartOfMultiChar = true;
+                        else if (op == "/" && (charAfter == '/' || charAfter == '='))
+                            isPartOfMultiChar = true;
+
+                        if (isPartOfMultiChar)
+                            continue;
+
+                        if (!IsInsideString(trimmed, match.Index) && !IsException(trimmed, op))
+                        {
+                            string fixedLine = trimmed.Substring(0, match.Index) +
+                                match.Groups[1].Value + " " + match.Groups[2].Value + " " + match.Groups[3].Value +
+                                trimmed.Substring(match.Index + match.Length);
+                            results.Add(new AnalysisResult(
+                                i + 1,
+                                "Formatting",
+                                $"Missing spaces around operator '{op}'",
+                                "Add spaces around operator",
+                                trimmed,
+                                fixedLine
+                            ));
+                        }
+                    }
+                }
+
+                // Словесные операторы: and, or, is - используем границы слов
+                // Исправленный паттерн: ищем только отдельно стоящие операторы
+                var wordOperators = new[] { "and", "or", "is", "not", "in" };
+
+                foreach (var op in wordOperators)
+                {
+                    // Ищем случаи где оператор слит с другими словами (без пробелов)
+                    // Но только когда оператор стоит отдельно (не внутри другого слова)
+                    var pattern = $@"(?<!\w){Regex.Escape(op)}(?!\w)";
+                    var matches = Regex.Matches(trimmed, pattern, RegexOptions.IgnoreCase);
+
+                    foreach (Match match in matches)
+                    {
+                        int opIndex = match.Index;
+
+                        // Проверяем контекст слева и справа
+                        bool hasSpaceLeft = opIndex > 0 && char.IsWhiteSpace(trimmed[opIndex - 1]);
+                        bool hasSpaceRight = opIndex + op.Length < trimmed.Length && char.IsWhiteSpace(trimmed[opIndex + op.Length]);
+
+                        // Если оператор стоит в начале строки или после открывающей скобки, это тоже ок
+                        bool atStartOfLine = opIndex == 0;
+                        bool afterOpenParen = opIndex > 0 && trimmed[opIndex - 1] == '(';
+
+                        // Если оператор стоит в конце строки или перед закрывающей скобкой, это тоже ок
+                        bool atEndOfLine = opIndex + op.Length == trimmed.Length;
+                        bool beforeCloseParen = opIndex + op.Length < trimmed.Length && trimmed[opIndex + op.Length] == ')';
+
+                        // Проверяем, что оператор не является частью другого слова
+                        bool isPartOfWord = false;
+                        if (opIndex > 0 && char.IsLetterOrDigit(trimmed[opIndex - 1]))
+                            isPartOfWord = true;
+                        if (opIndex + op.Length < trimmed.Length && char.IsLetterOrDigit(trimmed[opIndex + op.Length]))
+                            isPartOfWord = true;
+
+                        // Проверяем, не является ли это частью составного оператора (is not, not in)
+                        bool isCompoundOperator = false;
+                        if (op == "is" && opIndex + 2 < trimmed.Length && trimmed.Substring(opIndex + 2, 3) == "not")
+                            isCompoundOperator = true;
+                        if (op == "not" && opIndex + 3 < trimmed.Length && trimmed.Substring(opIndex + 4, 2) == "in")
+                            isCompoundOperator = true;
+
+                        if (!isPartOfWord && !IsInsideString(trimmed, opIndex) && !isCompoundOperator)
+                        {
+                            // Проверяем, нужны ли пробелы
+                            bool needsSpaceLeft = !hasSpaceLeft && !atStartOfLine && !afterOpenParen;
+                            bool needsSpaceRight = !hasSpaceRight && !atEndOfLine && !beforeCloseParen;
+
+                            if (needsSpaceLeft || needsSpaceRight)
+                            {
+                                string fixedLine = trimmed;
+
+                                if (needsSpaceRight && opIndex + op.Length < fixedLine.Length)
+                                {
+                                    fixedLine = fixedLine.Insert(opIndex + op.Length, " ");
+                                }
+                                if (needsSpaceLeft && opIndex > 0)
+                                {
+                                    fixedLine = fixedLine.Insert(opIndex, " ");
+                                }
+
+                                results.Add(new AnalysisResult(
+                                    i + 1,
+                                    "Formatting",
+                                    $"Missing spaces around operator '{op}'",
+                                    "Add spaces around operator",
+                                    trimmed,
+                                    fixedLine
+                                ));
+                            }
+                        }
+                    }
+                }
             }
             return results;
+        }
+
+        private List<AnalysisResult> CheckCommaSpacing(string[] lines)
+        {
+            var results = new List<AnalysisResult>();
+            for (int i = 0; i < lines.Length; i++)
+            {
+                string line = lines[i];
+                string trimmed = line.Trim();
+
+                if (string.IsNullOrWhiteSpace(trimmed) || trimmed.StartsWith("#"))
+                    continue;
+
+                // Сохраняем отступ оригинальной строки
+                string indent = new string(' ', line.Length - line.TrimStart().Length);
+
+                // Ищем запятые без пробела после них (но не внутри строк)
+                for (int j = 0; j < trimmed.Length; j++)
+                {
+                    if (trimmed[j] == ',')
+                    {
+                        // Пропускаем запятые внутри строковых литералов
+                        if (IsInsideString(trimmed, j))
+                            continue;
+
+                        // Пропускаем запятые в числах (например, 1,000)
+                        if (j > 0 && j < trimmed.Length - 1)
+                        {
+                            char charBefore = trimmed[j - 1];
+                            char charAfter = trimmed[j + 1];
+                            if (char.IsDigit(charBefore) && char.IsDigit(charAfter))
+                                continue;
+                        }
+
+                        // Пропускаем запятые в конце строки
+                        bool isAtEnd = j == trimmed.Length - 1;
+
+                        // Проверяем, есть ли пробел после запятой
+                        if (!isAtEnd)
+                        {
+                            int nextCharIndex = j + 1;
+
+                            // Пропускаем пробелы и табы, ищем следующий непробельный символ
+                            while (nextCharIndex < trimmed.Length && char.IsWhiteSpace(trimmed[nextCharIndex]))
+                            {
+                                nextCharIndex++;
+                            }
+
+                            // Если следующий непробельный символ существует
+                            if (nextCharIndex < trimmed.Length)
+                            {
+                                char nextChar = trimmed[nextCharIndex];
+
+                                // Проверяем различные случаи
+                                bool needsSpace = true;
+
+                                // Исключения:
+                                // 1. Следующий символ - закрывающая скобка или квадратная скобка
+                                if (nextChar == ')' || nextChar == ']' || nextChar == '}')
+                                {
+                                    needsSpace = false;
+                                }
+                                // 2. Если это конец комментария
+                                else if (nextCharIndex + 1 < trimmed.Length &&
+                                         trimmed[nextCharIndex] == '#' && nextCharIndex == j + 1)
+                                {
+                                    needsSpace = false;
+                                }
+                                // 3. Если следующая запятая или двоеточие
+                                else if (nextChar == ',' || nextChar == ':')
+                                {
+                                    needsSpace = false;
+                                }
+
+                                if (needsSpace)
+                                {
+                                    // Проверяем, нет ли уже пробела сразу после запятой
+                                    if (j + 1 < trimmed.Length && !char.IsWhiteSpace(trimmed[j + 1]))
+                                    {
+                                        // Вставляем один пробел после запятой
+                                        string fixedTrimmed = trimmed.Substring(0, j + 1) + " " + trimmed.Substring(j + 1);
+                                        string fixedLine = indent + fixedTrimmed;
+
+                                        results.Add(new AnalysisResult(
+                                            i + 1,
+                                            "Formatting",
+                                            "Missing space after comma",
+                                            "Add space after comma",
+                                            line,
+                                            fixedLine
+                                        ));
+
+                                        // Обновляем trimmed для текущей строки
+                                        trimmed = fixedTrimmed;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            return results;
+        }
+
+        private List<AnalysisResult> CheckNoneComparisons(string[] lines)
+        {
+            var results = new List<AnalysisResult>();
+            for (int i = 0; i < lines.Length; i++)
+            {
+                string line = lines[i];
+                string trimmed = line.Trim();
+
+                if (string.IsNullOrWhiteSpace(trimmed) || trimmed.StartsWith("#"))
+                    continue;
+
+                // Проверяем == None и != None
+                // Используем границы слов для точного поиска
+
+                // Паттерн для == None: может быть частью if/while/elif и т.д.
+                var patternEquals = @"(\b\w+\b)\s*==\s*None\b";
+                var matchesEquals = Regex.Matches(trimmed, patternEquals, RegexOptions.IgnoreCase);
+                foreach (Match match in matchesEquals)
+                {
+                    if (!IsInsideString(trimmed, match.Index))
+                    {
+                        string varName = match.Groups[1].Value;
+                        string fixedLine = trimmed.Substring(0, match.Index) +
+                            $"{varName} is None" +
+                            trimmed.Substring(match.Index + match.Length);
+                        results.Add(new AnalysisResult(
+                            i + 1,
+                            "Best Practice",
+                            "Use 'is None' instead of '== None' for None comparison",
+                            "Replace '== None' with 'is None'",
+                            trimmed,
+                            fixedLine
+                        ));
+                    }
+                }
+
+                // Паттерн для != None
+                var patternNotEquals = @"(\b\w+\b)\s*!=\s*None\b";
+                var matchesNotEquals = Regex.Matches(trimmed, patternNotEquals, RegexOptions.IgnoreCase);
+                foreach (Match match in matchesNotEquals)
+                {
+                    if (!IsInsideString(trimmed, match.Index))
+                    {
+                        string varName = match.Groups[1].Value;
+                        string fixedLine = trimmed.Substring(0, match.Index) +
+                            $"{varName} is not None" +
+                            trimmed.Substring(match.Index + match.Length);
+                        results.Add(new AnalysisResult(
+                            i + 1,
+                            "Best Practice",
+                            "Use 'is not None' instead of '!= None' for None comparison",
+                            "Replace '!= None' with 'is not None'",
+                            trimmed,
+                            fixedLine
+                        ));
+                    }
+                }
+            }
+            return results;
+        }
+
+        private bool IsInsideString(string line, int index)
+        {
+            bool inSingleQuote = false;
+            bool inDoubleQuote = false;
+            bool escaped = false;
+            bool inTripleSingle = false;
+            bool inTripleDouble = false;
+
+            for (int i = 0; i < index && i < line.Length; i++)
+            {
+                char c = line[i];
+                if (escaped)
+                {
+                    escaped = false;
+                    continue;
+                }
+                if (c == '\\')
+                {
+                    escaped = true;
+                    continue;
+                }
+
+                // Проверка тройных кавычек
+                if (i + 2 < line.Length)
+                {
+                    string triple = line.Substring(i, 3);
+                    if (triple == "'''" && !inDoubleQuote && !inTripleDouble)
+                    {
+                        inTripleSingle = !inTripleSingle;
+                        i += 2;
+                        continue;
+                    }
+                    if (triple == "\"\"\"" && !inSingleQuote && !inTripleSingle)
+                    {
+                        inTripleDouble = !inTripleDouble;
+                        i += 2;
+                        continue;
+                    }
+                }
+
+                if (!inTripleSingle && !inTripleDouble)
+                {
+                    if (c == '\'' && !inDoubleQuote)
+                    {
+                        inSingleQuote = !inSingleQuote;
+                    }
+                    else if (c == '"' && !inSingleQuote)
+                    {
+                        inDoubleQuote = !inDoubleQuote;
+                    }
+                }
+            }
+
+            return inSingleQuote || inDoubleQuote || inTripleSingle || inTripleDouble;
         }
 
         private bool IsException(string line, string op)
@@ -236,7 +717,7 @@ namespace StaticCodeAnalyzer.Models
                             "" // Удаляем строку
                         ));
 
-                        // После удаления переходим к следующей строке
+                        // После удаления переходим к следующей строки
                         break;
                     }
                     else
@@ -426,32 +907,12 @@ namespace StaticCodeAnalyzer.Models
                     }
                 }
 
-                // 3. Проверка имен переменных (snake_case)
-                var varMatch = Regex.Match(trimmedLine, @"^\s*([a-zA-Z_]\w*)\s*=");
-                if (varMatch.Success)
-                {
-                    string varName = varMatch.Groups[1].Value;
-                    // Пропускаем стандартные имена и специальные случаи
-                    if (!IsSpecialVariable(varName) && !IsSnakeCase(varName) && !_keywords.Contains(varName.ToLower()))
-                    {
-                        string fixedName = ToSnakeCase(varName);
-                        string fixedLine = line.Replace(varName, fixedName);
-                        results.Add(new AnalysisResult(
-                            i + 1,
-                            "Naming",
-                            $"Variable name '{varName}' should use snake_case",
-                            "Rename variable to use snake_case",
-                            line.Trim(),
-                            fixedLine.Trim()
-                        ));
-                    }
-                }
-
-                // 4. Проверка констант (UPPER_SNAKE_CASE)
+                // 3. Проверка констант (UPPER_SNAKE_CASE) - проверяем ПЕРЕД переменными, т.к. константы - более специфичный случай
                 var constMatch = Regex.Match(trimmedLine, @"^\s*([A-Z][A-Z_0-9]*)\s*=");
                 if (constMatch.Success)
                 {
                     string constName = constMatch.Groups[1].Value;
+                    // Проверяем только если имя НЕ является уже корректным UPPER_SNAKE_CASE
                     if (!IsUpperSnakeCase(constName))
                     {
                         string fixedName = ToUpperSnakeCase(constName);
@@ -461,6 +922,29 @@ namespace StaticCodeAnalyzer.Models
                             "Naming",
                             $"Constant name '{constName}' should use UPPER_SNAKE_CASE",
                             "Rename constant to use UPPER_SNAKE_CASE",
+                            line.Trim(),
+                            fixedLine.Trim()
+                        ));
+                    }
+                    // Если это уже корректная константа, пропускаем проверку переменных для этой строки
+                    continue;
+                }
+
+                // 4. Проверка имен переменных (snake_case)
+                var varMatch = Regex.Match(trimmedLine, @"^\s*([a-zA-Z_]\w*)\s*=");
+                if (varMatch.Success)
+                {
+                    string varName = varMatch.Groups[1].Value;
+                    // Пропускаем стандартные имена, специальные случаи, ключевые слова и уже корректные UPPER_SNAKE_CASE
+                    if (!IsSpecialVariable(varName) && !IsSnakeCase(varName) && !_keywords.Contains(varName.ToLower()) && !IsUpperSnakeCase(varName))
+                    {
+                        string fixedName = ToSnakeCase(varName);
+                        string fixedLine = line.Replace(varName, fixedName);
+                        results.Add(new AnalysisResult(
+                            i + 1,
+                            "Naming",
+                            $"Variable name '{varName}' should use snake_case",
+                            "Rename variable to use snake_case",
                             line.Trim(),
                             fixedLine.Trim()
                         ));
@@ -518,6 +1002,18 @@ namespace StaticCodeAnalyzer.Models
         {
             if (string.IsNullOrEmpty(name)) return name;
 
+            // Если имя уже в UPPER_SNAKE_CASE, просто конвертируем в нижний регистр
+            if (IsUpperSnakeCase(name))
+            {
+                return name.ToLower();
+            }
+
+            // Если имя уже содержит подчеркивания и в нижнем регистре, возможно уже snake_case
+            if (name.Contains('_') && name == name.ToLower())
+            {
+                return name; // Уже в snake_case
+            }
+
             // Разделяем CamelCase или PascalCase на слова
             var words = new List<string>();
             var currentWord = new StringBuilder();
@@ -542,6 +1038,19 @@ namespace StaticCodeAnalyzer.Models
 
         private string ToUpperSnakeCase(string name)
         {
+            // Если имя уже в UPPER_SNAKE_CASE, возвращаем как есть
+            if (IsUpperSnakeCase(name))
+            {
+                return name;
+            }
+
+            // Если имя уже в snake_case (lowercase with underscores), просто конвертируем в верхний регистр
+            if (name.Contains('_') && name == name.ToLower())
+            {
+                return name.ToUpper();
+            }
+
+            // Иначе конвертируем через ToSnakeCase и затем в верхний регистр
             string snakeCase = ToSnakeCase(name);
             return snakeCase.ToUpper();
         }
@@ -619,8 +1128,45 @@ namespace StaticCodeAnalyzer.Models
                         }
                         else if (!string.IsNullOrWhiteSpace(error.FixedCode))
                         {
-                            // Заменяем строку
-                            lines[lineIndex] = error.FixedCode;
+                            // Сохраняем отступ оригинальной строки
+                            string originalLine = lines[lineIndex];
+                            string originalIndent = new string(' ', originalLine.Length - originalLine.TrimStart().Length);
+                            string fixedCode = error.FixedCode;
+
+                            // Если FixedCode содержит несколько строк (например, разделенные импорты)
+                            if (fixedCode.Contains("\n"))
+                            {
+                                var fixedLines = fixedCode.Split('\n').ToList();
+
+                                // Добавляем отступ к каждой строке
+                                for (int j = 0; j < fixedLines.Count; j++)
+                                {
+                                    if (!string.IsNullOrWhiteSpace(fixedLines[j]))
+                                    {
+                                        // Если строка уже имеет отступ, используем его, иначе добавляем оригинальный
+                                        string lineIndent = new string(' ', fixedLines[j].Length - fixedLines[j].TrimStart().Length);
+                                        if (lineIndent.Length == 0 && originalIndent.Length > 0)
+                                        {
+                                            fixedLines[j] = originalIndent + fixedLines[j].TrimStart();
+                                        }
+                                    }
+                                }
+
+                                // Заменяем одну строку несколькими
+                                lines.RemoveAt(lineIndex);
+                                lines.InsertRange(lineIndex, fixedLines);
+                            }
+                            else
+                            {
+                                // Одна строка - добавляем отступ если нужно
+                                if (!fixedCode.StartsWith(" ") && !fixedCode.StartsWith("\t") && originalIndent.Length > 0)
+                                {
+                                    fixedCode = originalIndent + fixedCode.TrimStart();
+                                }
+
+                                // Заменяем строку
+                                lines[lineIndex] = fixedCode;
+                            }
                         }
                     }
                 }
